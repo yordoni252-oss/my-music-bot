@@ -1,39 +1,33 @@
 import os
+import glob
 import yt_dlp
 import telebot
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "TOKEN_SHUNGA_YOZING")
+BOT_TOKEN = "8731179006:AAHhpMLPd8ljQPDvTGcwo7xwy_wDSaJQIEk"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "🎵 Qo'shiq nomini yozing — to'liq MP3 yuboraman!")
+    bot.reply_to(message, "🎵 Salom! Qo'shiq nomini yozing, to'liq yuboraman!")
 
 @bot.message_handler(func=lambda m: True)
 def qushiq(message):
-    msg = bot.reply_to(message, "🔍 Qidirilmoqda...")
-
-    query = message.text
-    filepath = f"/tmp/{message.chat.id}.mp3"
+    uid = message.chat.id
+    msg = bot.reply_to(message, "⬇️ Yuklanmoqda, kuting...")
 
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": f"/tmp/{message.chat.id}.%(ext)s",
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "default_search": "ytsearch1",
+        "outtmpl": f"/tmp/{uid}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
+        "noplaylist": True,
     }
 
     try:
-        bot.edit_message_text("⬇️ Yuklanmoqda...", message.chat.id, msg.message_id)
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
+            info = ydl.extract_info(
+                f"ytsearch1:{message.text}", download=True
+            )
             if "entries" in info:
                 info = info["entries"][0]
 
@@ -41,24 +35,29 @@ def qushiq(message):
             artist = info.get("uploader", "Ijrochi")
             duration = info.get("duration", 0)
 
-        bot.edit_message_text("⬆️ Yuborilmoqda...", message.chat.id, msg.message_id)
+        files = glob.glob(f"/tmp/{uid}.*")
+        if not files:
+            raise Exception("Fayl topilmadi")
 
-        with open(filepath, "rb") as f:
+        filepath = files[0]
+
+        bot.edit_message_text("⬆️ Yuborilmoqda...", uid, msg.message_id)
+
+        with open(filepath, "rb") as audio:
             bot.send_audio(
-                message.chat.id,
-                f,
+                uid, audio,
                 title=title,
                 performer=artist,
                 duration=duration
             )
 
-        bot.delete_message(message.chat.id, msg.message_id)
+        bot.delete_message(uid, msg.message_id)
 
     except Exception as e:
-        bot.edit_message_text(f"❌ Xato yuz berdi: {e}", message.chat.id, msg.message_id)
+        bot.edit_message_text(f"❌ Xato: {e}", uid, msg.message_id)
 
     finally:
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        for f in glob.glob(f"/tmp/{uid}.*"):
+            os.remove(f)
 
 bot.infinity_polling()
