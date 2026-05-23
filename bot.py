@@ -1,118 +1,64 @@
 import os
-import requests
+import yt_dlp
 import telebot
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "TOKEN_SHUNGA_YOZING")
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def format_duration(ms):
-    if not ms:
-        return "0:00"
-    seconds = ms // 1000
-    minutes = seconds // 60
-    secs = seconds % 60
-    return f"{minutes}:{secs:02d}"
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "🎵 Qo'shiq nomini yozing — to'liq MP3 yuboraman!")
 
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(
-        message,
-        "👋 Salom! Men sizga istalgan musiqani tez va muammosiz topib beruvchi botman.\n\n"
-        "🎵 Qo'shiq nomini yoki ijrochini yozib yuboring:"
-    )
+@bot.message_handler(func=lambda m: True)
+def qushiq(message):
+    msg = bot.reply_to(message, "🔍 Qidirilmoqda...")
 
-@bot.message_handler(func=lambda message: True)
-def search_song(message):
     query = message.text
-    status_msg = bot.reply_to(message, "🔍 Qo'shiq qidirilmoqda...")
+    filepath = f"/tmp/{message.chat.id}.mp3"
 
-    search_url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=5"
-
-    try:
-        response = requests.get(search_url, timeout=10).json()
-        results = response.get('results', [])
-
-        if not results:
-            bot.edit_message_text(
-                "❌ Hech narsa topilmadi. Boshqa nom yozib ko'ring.",
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id
-            )
-            return
-
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        text = "🎵 *Topilgan qo'shiqlar:*\n\n"
-
-        for i, track in enumerate(results, 1):
-            # FIX: apostrof muammosi — double quotes ishlatildi
-            title = track.get('trackName', "Noma'lum trek")
-            artist = track.get('artistName', "Noma'lum ijrochi")
-            duration = format_duration(track.get('trackTimeMillis'))
-            track_id = track.get('trackId')
-
-            text += f"{i}. *{artist}* — {title} ⏱ {duration}\n"
-
-            button = telebot.types.InlineKeyboardButton(
-                text=f"🎵 {i}. {artist} - {title[:30]}",
-                callback_data=f"itunes_{track_id}"
-            )
-            keyboard.add(button)
-
-        bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
-        bot.send_message(
-            message.chat.id,
-            text,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
-
-    except Exception as e:
-        bot.edit_message_text(
-            "❌ Qidiruv tizimida xatolik yuz berdi.",
-            chat_id=message.chat.id,
-            message_id=status_msg.message_id
-        )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("itunes_"))
-def play_song(call):
-    track_id = call.data.split("_")[1]
-    track_url = f"https://itunes.apple.com/lookup?id={track_id}"
-
-    bot.answer_callback_query(call.id, "⚡ Musiqa yuborilmoqda...")
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"/tmp/{message.chat.id}.%(ext)s",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "default_search": "ytsearch1",
+        "quiet": True,
+        "no_warnings": True,
+    }
 
     try:
-        response = requests.get(track_url, timeout=10).json()
-        results = response.get('results', [])
+        bot.edit_message_text("⬇️ Yuklanmoqda...", message.chat.id, msg.message_id)
 
-        if not results:
-            bot.send_message(call.message.chat.id, "❌ Qo'shiq ma'lumoti topilmadi.")
-            return
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=True)
+            if "entries" in info:
+                info = info["entries"][0]
 
-        track = results[0]
-        audio_url = track.get('previewUrl')
+            title = info.get("title", "Musiqa")
+            artist = info.get("uploader", "Ijrochi")
+            duration = info.get("duration", 0)
 
-        if not audio_url:
-            bot.send_message(call.message.chat.id, "❌ Bu qo'shiq uchun audio mavjud emas.")
-            return
+        bot.edit_message_text("⬆️ Yuborilmoqda...", message.chat.id, msg.message_id)
 
-        title = track.get('trackName', "Noma'lum")
-        performer = track.get('artistName', "Noma'lum")
+        with open(filepath, "rb") as f:
+            bot.send_audio(
+                message.chat.id,
+                f,
+                title=title,
+                performer=artist,
+                duration=duration
+            )
 
-        # FIX: URL o'rniga bytes sifatida yuborish — ishonchliroq
-        audio_response = requests.get(audio_url, timeout=15)
-        audio_response.raise_for_status()
+        bot.delete_message(message.chat.id, msg.message_id)
 
-        bot.send_audio(
-            chat_id=call.message.chat.id,
-            audio=audio_response.content,
-            title=title,
-            performer=performer,
-            caption="⚠️ Bu 30 soniyalik preview (iTunes cheklovi)"
-        )
-
-    except requests.exceptions.RequestException:
-        bot.send_message(call.message.chat.id, "❌ Audio yuklab olishda tarmoq xatosi yuz berdi.")
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Xatolik: {str(e)}")
+        bot.edit_message_text(f"❌ Xato yuz berdi: {e}", message.chat.id, msg.message_id)
 
-bot.polling(none_stop=True)
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+bot.infinity_polling()
